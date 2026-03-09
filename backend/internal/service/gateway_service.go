@@ -5353,8 +5353,13 @@ func buildBetaTokenSet(tokens []string) map[string]struct{} {
 }
 
 var (
-	defaultDroppedBetasSet        = buildBetaTokenSet(claude.DroppedBetas)
-	droppedBetasWithClaudeCodeSet = droppedBetaSet(claude.BetaClaudeCode)
+	defaultDroppedBetasSet = buildBetaTokenSet(claude.DroppedBetas)
+	// droppedBetasWithClaudeCodeSet is used for the "mimic Claude Code" path
+	// (non-CC clients on OAuth accounts).  In addition to BetaClaudeCode we
+	// also drop BetaContext1M: the upstream rejects non-CC sessions that
+	// include the 1M-context beta, but real Claude Code sessions are allowed
+	// to carry it through the non-mimic path (defaultDroppedBetasSet).
+	droppedBetasWithClaudeCodeSet = droppedBetaSet(claude.BetaClaudeCode, claude.BetaContext1M)
 )
 
 // applyClaudeCodeMimicHeaders forces "Claude Code-like" request headers.
