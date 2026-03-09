@@ -38,6 +38,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return nil, fmt.Errorf("parse anthropic request: %w", err)
 	}
 	originalModel := anthropicReq.Model
+	// clientWantsStream preserves the caller's original preference.
+	// isStream may be overridden to true for OAuth upstreams that require SSE.
+	clientWantsStream := anthropicReq.Stream
 	isStream := anthropicReq.Stream
 
 	// 2. Convert Anthropic → Responses
@@ -73,8 +76,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			return nil, fmt.Errorf("unmarshal for codex transform: %w", err)
 		}
 		applyCodexOAuthTransform(reqBody, false, false)
-		// OAuth codex transform forces stream=true upstream, so always use
-		// the streaming response handler regardless of what the client asked.
+		// OAuth upstream only supports SSE; force stream=true for the upstream
+		// request. clientWantsStream is unchanged so the response handler will
+		// still honour the caller's original stream preference.
 		isStream = true
 		responsesBody, err = json.Marshal(reqBody)
 		if err != nil {
@@ -151,12 +155,22 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return s.handleAnthropicErrorResponse(resp, c, account)
 	}
 
-	// 9. Handle normal response
+	// 9. Handle normal response.
+	// Use clientWantsStream (not isStream) to decide how to respond to the
+	// caller: for OAuth accounts isStream is forced true so the upstream always
+	// speaks SSE, but we must still honour the caller's original preference.
 	var result *OpenAIForwardResult
 	var handleErr error
-	if isStream {
+	switch {
+	case clientWantsStream:
+		// Client wants SSE; upstream is also streaming — pass through directly.
 		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, originalModel, mappedModel, startTime)
-	} else {
+	case isStream:
+		// Upstream is streaming (OAuth forced) but client wants a single JSON
+		// object — collect the SSE and assemble the non-streaming response.
+		result, handleErr = s.handleAnthropicStreamToNonStreamingResponse(resp, c, originalModel, mappedModel, startTime)
+	default:
+		// Both client and upstream are non-streaming.
 		result, handleErr = s.handleAnthropicNonStreamingResponse(resp, c, originalModel, mappedModel, startTime)
 	}
 
@@ -401,6 +415,193 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		Stream:       true,
 		Duration:     time.Since(startTime),
 		FirstTokenMs: firstTokenMs,
+	}, nil
+}
+
+// handleAnthropicStreamToNonStreamingResponse handles the case where the
+// upstream always returns SSE (e.g. OAuth accounts) but the client requested a
+// non-streaming JSON response.  It reads the full Responses SSE stream,
+// reassembles it into an Anthropic Messages response object, and writes a
+// single application/json body to the client.
+func (s *OpenAIGatewayService) handleAnthropicStreamToNonStreamingResponse(
+	resp *http.Response,
+	c *gin.Context,
+	originalModel string,
+	mappedModel string,
+	startTime time.Time,
+) (*OpenAIForwardResult, error) {
+	requestID := resp.Header.Get("x-request-id")
+
+	state := apicompat.NewResponsesEventToAnthropicState()
+	state.Model = originalModel
+
+	// contentBlock accumulates content for a single Anthropic block index.
+	type contentBlock struct {
+		typ       string
+		textBuf   strings.Builder // text / thinking content
+		inputBuf  strings.Builder // partial JSON for tool_use input
+		id        string
+		name      string
+		inputJSON json.RawMessage // pre-built input for server_tool_use
+		toolUseID string          // web_search_tool_result
+		content   json.RawMessage // web_search_tool_result content
+	}
+	blocks := make(map[int]*contentBlock)
+	stopReason := "end_turn"
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") || line == "data: [DONE]" {
+			continue
+		}
+		payload := line[6:]
+
+		var event apicompat.ResponsesStreamEvent
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			logger.L().Warn("openai messages stream-to-nonstream: failed to parse event",
+				zap.Error(err),
+				zap.String("request_id", requestID),
+			)
+			continue
+		}
+
+		for _, evt := range apicompat.ResponsesEventToAnthropicEvents(&event, state) {
+			switch evt.Type {
+			case "content_block_start":
+				if evt.Index == nil || evt.ContentBlock == nil {
+					continue
+				}
+				b := &contentBlock{typ: evt.ContentBlock.Type}
+				switch evt.ContentBlock.Type {
+				case "tool_use":
+					b.id = evt.ContentBlock.ID
+					b.name = evt.ContentBlock.Name
+				case "server_tool_use":
+					b.id = evt.ContentBlock.ID
+					b.name = evt.ContentBlock.Name
+					b.inputJSON = evt.ContentBlock.Input
+				case "web_search_tool_result":
+					b.toolUseID = evt.ContentBlock.ToolUseID
+					b.content = evt.ContentBlock.Content
+				}
+				blocks[*evt.Index] = b
+
+			case "content_block_delta":
+				if evt.Index == nil || evt.Delta == nil {
+					continue
+				}
+				b, ok := blocks[*evt.Index]
+				if !ok {
+					continue
+				}
+				switch evt.Delta.Type {
+				case "text_delta":
+					b.textBuf.WriteString(evt.Delta.Text)
+				case "input_json_delta":
+					b.inputBuf.WriteString(evt.Delta.PartialJSON)
+				case "thinking_delta":
+					b.textBuf.WriteString(evt.Delta.Thinking)
+				}
+
+			case "message_delta":
+				if evt.Delta != nil && evt.Delta.StopReason != "" {
+					stopReason = evt.Delta.StopReason
+				}
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			logger.L().Warn("openai messages stream-to-nonstream: read error",
+				zap.Error(err),
+				zap.String("request_id", requestID),
+			)
+		}
+	}
+
+	// Assemble content blocks in index order.
+	var content []apicompat.AnthropicContentBlock
+	for idx := 0; idx < len(blocks); idx++ {
+		b, ok := blocks[idx]
+		if !ok {
+			continue
+		}
+		switch b.typ {
+		case "text":
+			content = append(content, apicompat.AnthropicContentBlock{
+				Type: "text",
+				Text: b.textBuf.String(),
+			})
+		case "thinking":
+			content = append(content, apicompat.AnthropicContentBlock{
+				Type:     "thinking",
+				Thinking: b.textBuf.String(),
+			})
+		case "tool_use":
+			inputRaw := json.RawMessage("{}")
+			if js := b.inputBuf.String(); js != "" {
+				inputRaw = json.RawMessage(js)
+			}
+			content = append(content, apicompat.AnthropicContentBlock{
+				Type:  "tool_use",
+				ID:    b.id,
+				Name:  b.name,
+				Input: inputRaw,
+			})
+		case "server_tool_use":
+			content = append(content, apicompat.AnthropicContentBlock{
+				Type:  "server_tool_use",
+				ID:    b.id,
+				Name:  b.name,
+				Input: b.inputJSON,
+			})
+		case "web_search_tool_result":
+			content = append(content, apicompat.AnthropicContentBlock{
+				Type:      "web_search_tool_result",
+				ToolUseID: b.toolUseID,
+				Content:   b.content,
+			})
+		}
+	}
+	if len(content) == 0 {
+		content = append(content, apicompat.AnthropicContentBlock{Type: "text", Text: ""})
+	}
+
+	usage := OpenAIUsage{
+		InputTokens:          state.InputTokens,
+		OutputTokens:         state.OutputTokens,
+		CacheReadInputTokens: state.CacheReadInputTokens,
+	}
+	anthropicResp := &apicompat.AnthropicResponse{
+		ID:         state.ResponseID,
+		Type:       "message",
+		Role:       "assistant",
+		Content:    content,
+		Model:      originalModel,
+		StopReason: stopReason,
+		Usage: apicompat.AnthropicUsage{
+			InputTokens:          state.InputTokens,
+			OutputTokens:         state.OutputTokens,
+			CacheReadInputTokens: state.CacheReadInputTokens,
+		},
+	}
+
+	if s.responseHeaderFilter != nil {
+		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	}
+	c.JSON(http.StatusOK, anthropicResp)
+
+	return &OpenAIForwardResult{
+		RequestID:    requestID,
+		Usage:        usage,
+		Model:        originalModel,
+		BillingModel: mappedModel,
+		Stream:       false,
+		Duration:     time.Since(startTime),
 	}, nil
 }
 
