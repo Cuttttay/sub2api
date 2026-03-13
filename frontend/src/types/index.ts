@@ -1496,6 +1496,9 @@ export interface ScheduledTestPlan {
   enabled: boolean
   max_results: number
   auto_recover: boolean
+  webhook_url: string
+  webhook_headers: Record<string, string> | null
+  notify_on_failure: boolean
   last_run_at: string | null
   next_run_at: string | null
   created_at: string
@@ -1521,6 +1524,9 @@ export interface CreateScheduledTestPlanRequest {
   enabled?: boolean
   max_results?: number
   auto_recover?: boolean
+  webhook_url?: string
+  webhook_headers?: Record<string, string>
+  notify_on_failure?: boolean
 }
 
 export interface UpdateScheduledTestPlanRequest {
@@ -1529,4 +1535,7 @@ export interface UpdateScheduledTestPlanRequest {
   enabled?: boolean
   max_results?: number
   auto_recover?: boolean
+  webhook_url?: string
+  webhook_headers?: Record<string, string>
+  notify_on_failure?: boolean
 }

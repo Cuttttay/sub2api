@@ -2566,7 +2566,17 @@ export default {
       maxResultsTooltipExample: 'For example, 100 means keeping at most the latest 100 test results. When the 101st result is saved, the oldest one is removed.',
       maxResultsTooltipRange: 'Recommended range: usually 20 to 200. Use 20-50 when you only care about recent health status, or 100-200 if you want a longer trend history.',
       autoRecover: 'Auto Recover',
-      autoRecoverHelp: 'Automatically recover account from error/rate-limited state on successful test'
+      autoRecoverHelp: 'Automatically recover account from error/rate-limited state on successful test',
+      webhookUrl: 'Webhook URL',
+      webhookUrlHelp: 'URL to receive failure notifications. Supports Feishu, WeCom, DingTalk, and generic webhooks.',
+      webhookUrlPlaceholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/...',
+      notifyOnFailure: 'Notify on Failure',
+      notifyOnFailureHelp: 'Send a webhook notification when the test fails',
+      webhookHeaders: 'Custom Request Headers',
+      webhookHeadersHelp: 'Extra HTTP headers sent with the webhook request, e.g. Authorization, X-Token',
+      webhookHeaderKey: 'Header name',
+      webhookHeaderValue: 'Value',
+      addHeader: 'Add header'
     },
 
     // Proxies

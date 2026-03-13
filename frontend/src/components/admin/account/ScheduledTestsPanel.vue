@@ -107,6 +107,59 @@
               </p>
             </div>
           </div>
+          <div class="flex items-end">
+            <div>
+              <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                <Toggle v-model="newPlan.notify_on_failure" />
+                {{ t('admin.scheduledTests.notifyOnFailure') }}
+              </label>
+              <p class="mt-0.5 text-xs text-gray-400 dark:text-gray-500">
+                {{ t('admin.scheduledTests.notifyOnFailureHelp') }}
+              </p>
+            </div>
+          </div>
+          <div class="sm:col-span-2">
+            <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+              {{ t('admin.scheduledTests.webhookUrl') }}
+            </label>
+            <Input
+              v-model="newPlan.webhook_url"
+              :placeholder="t('admin.scheduledTests.webhookUrlPlaceholder')"
+              :hint="t('admin.scheduledTests.webhookUrlHelp')"
+            />
+          </div>
+          <div class="sm:col-span-2">
+            <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+              {{ t('admin.scheduledTests.webhookHeaders') }}
+              <span class="ml-1 font-normal text-gray-400">{{ t('admin.scheduledTests.webhookHeadersHelp') }}</span>
+            </label>
+            <div class="space-y-1.5">
+              <div
+                v-for="(header, idx) in newPlanHeaders"
+                :key="idx"
+                class="flex gap-2"
+              >
+                <Input
+                  v-model="header.key"
+                  :placeholder="t('admin.scheduledTests.webhookHeaderKey')"
+                  class="flex-1"
+                />
+                <Input
+                  v-model="header.value"
+                  :placeholder="t('admin.scheduledTests.webhookHeaderValue')"
+                  class="flex-1"
+                />
+                <button
+                  @click="newPlanHeaders.splice(idx, 1)"
+                  class="rounded-lg px-2 text-gray-400 hover:text-red-500"
+                >✕</button>
+              </div>
+              <button
+                @click="newPlanHeaders.push({ key: '', value: '' })"
+                class="text-xs text-primary-500 hover:text-primary-600"
+              >+ {{ t('admin.scheduledTests.addHeader') }}</button>
+            </div>
+          </div>
         </div>
         <div class="mt-3 flex justify-end gap-2">
           <button
@@ -317,6 +370,59 @@
                   </p>
                 </div>
               </div>
+              <div class="flex items-end">
+                <div>
+                  <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                    <Toggle v-model="editForm.notify_on_failure" />
+                    {{ t('admin.scheduledTests.notifyOnFailure') }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-400 dark:text-gray-500">
+                    {{ t('admin.scheduledTests.notifyOnFailureHelp') }}
+                  </p>
+                </div>
+              </div>
+              <div class="sm:col-span-2">
+                <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                  {{ t('admin.scheduledTests.webhookUrl') }}
+                </label>
+                <Input
+                  v-model="editForm.webhook_url"
+                  :placeholder="t('admin.scheduledTests.webhookUrlPlaceholder')"
+                  :hint="t('admin.scheduledTests.webhookUrlHelp')"
+                />
+              </div>
+              <div class="sm:col-span-2">
+                <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                  {{ t('admin.scheduledTests.webhookHeaders') }}
+                  <span class="ml-1 font-normal text-gray-400">{{ t('admin.scheduledTests.webhookHeadersHelp') }}</span>
+                </label>
+                <div class="space-y-1.5">
+                  <div
+                    v-for="(header, idx) in editFormHeaders"
+                    :key="idx"
+                    class="flex gap-2"
+                  >
+                    <Input
+                      v-model="header.key"
+                      :placeholder="t('admin.scheduledTests.webhookHeaderKey')"
+                      class="flex-1"
+                    />
+                    <Input
+                      v-model="header.value"
+                      :placeholder="t('admin.scheduledTests.webhookHeaderValue')"
+                      class="flex-1"
+                    />
+                    <button
+                      @click="editFormHeaders.splice(idx, 1)"
+                      class="rounded-lg px-2 text-gray-400 hover:text-red-500"
+                    >✕</button>
+                  </div>
+                  <button
+                    @click="editFormHeaders.push({ key: '', value: '' })"
+                    class="text-xs text-primary-500 hover:text-primary-600"
+                  >+ {{ t('admin.scheduledTests.addHeader') }}</button>
+                </div>
+              </div>
             </div>
             <div class="mt-3 flex justify-end gap-2">
               <button
@@ -508,16 +614,28 @@ const editForm = reactive({
   cron_expression: '' as string,
   max_results: '100' as string,
   enabled: true,
-  auto_recover: false
+  auto_recover: false,
+  webhook_url: '' as string,
+  notify_on_failure: false
 })
+const editFormHeaders = ref<{ key: string; value: string }[]>([])
 
 const newPlan = reactive({
   model_id: '' as string,
   cron_expression: '' as string,
   max_results: '100' as string,
   enabled: true,
-  auto_recover: false
+  auto_recover: false,
+  webhook_url: '' as string,
+  notify_on_failure: false
 })
+const newPlanHeaders = ref<{ key: string; value: string }[]>([])
+
+const headersToRecord = (headers: { key: string; value: string }[]): Record<string, string> =>
+  Object.fromEntries(headers.filter((h) => h.key.trim()).map((h) => [h.key.trim(), h.value]))
+
+const recordToHeaders = (record: Record<string, string> | null): { key: string; value: string }[] =>
+  record ? Object.entries(record).map(([key, value]) => ({ key, value })) : []
 
 const resetNewPlan = () => {
   newPlan.model_id = ''
@@ -525,6 +643,9 @@ const resetNewPlan = () => {
   newPlan.max_results = '100'
   newPlan.enabled = true
   newPlan.auto_recover = false
+  newPlan.webhook_url = ''
+  newPlan.notify_on_failure = false
+  newPlanHeaders.value = []
 }
 
 // Load plans when dialog opens
@@ -567,7 +688,10 @@ const handleCreate = async () => {
       cron_expression: newPlan.cron_expression,
       enabled: newPlan.enabled,
       max_results: maxResults,
-      auto_recover: newPlan.auto_recover
+      auto_recover: newPlan.auto_recover,
+      webhook_url: newPlan.webhook_url,
+      webhook_headers: headersToRecord(newPlanHeaders.value),
+      notify_on_failure: newPlan.notify_on_failure
     })
     appStore.showSuccess(t('admin.scheduledTests.createSuccess'))
     showAddForm.value = false
@@ -600,6 +724,9 @@ const startEdit = (plan: ScheduledTestPlan) => {
   editForm.max_results = String(plan.max_results)
   editForm.enabled = plan.enabled
   editForm.auto_recover = plan.auto_recover
+  editForm.webhook_url = plan.webhook_url ?? ''
+  editForm.notify_on_failure = plan.notify_on_failure ?? false
+  editFormHeaders.value = recordToHeaders(plan.webhook_headers)
 }
 
 const cancelEdit = () => {
@@ -615,7 +742,10 @@ const handleEdit = async () => {
       cron_expression: editForm.cron_expression,
       max_results: Number(editForm.max_results) || 100,
       enabled: editForm.enabled,
-      auto_recover: editForm.auto_recover
+      auto_recover: editForm.auto_recover,
+      webhook_url: editForm.webhook_url,
+      webhook_headers: headersToRecord(editFormHeaders.value),
+      notify_on_failure: editForm.notify_on_failure
     })
     const index = plans.value.findIndex((p) => p.id === editingPlanId.value)
     if (index !== -1) {

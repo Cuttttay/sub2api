@@ -2672,7 +2672,17 @@ export default {
       maxResultsTooltipExample: '例如填写 100，表示最多保存最近 100 次测试结果；第 101 次结果写入后，最早的一条会被清理。',
       maxResultsTooltipRange: '推荐填写范围：一般可填 20 到 200。只关注近期可用性时可填 20-50；需要回看较长时间的波动趋势时可填 100-200。',
       autoRecover: '自动恢复',
-      autoRecoverHelp: '测试成功后自动恢复异常状态的账号'
+      autoRecoverHelp: '测试成功后自动恢复异常状态的账号',
+      webhookUrl: 'Webhook URL',
+      webhookUrlHelp: '测试失败时推送通知的地址，支持飞书、企业微信、钉钉及通用 Webhook',
+      webhookUrlPlaceholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/...',
+      notifyOnFailure: '失败时通知',
+      notifyOnFailureHelp: '仅在测试失败时通过 Webhook 推送通知',
+      webhookHeaders: '自定义请求头',
+      webhookHeadersHelp: '发送 Webhook 时附带的额外 HTTP 请求头，如 Authorization、X-Token 等',
+      webhookHeaderKey: '请求头名称',
+      webhookHeaderValue: '值',
+      addHeader: '添加请求头'
     },
 
     // Proxies Management

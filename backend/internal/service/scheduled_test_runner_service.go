@@ -18,6 +18,7 @@ type ScheduledTestRunnerService struct {
 	scheduledSvc   *ScheduledTestService
 	accountTestSvc *AccountTestService
 	rateLimitSvc   *RateLimitService
+	webhookSvc     *WebhookService
 	cfg            *config.Config
 
 	cron      *cron.Cron
@@ -38,6 +39,7 @@ func NewScheduledTestRunnerService(
 		scheduledSvc:   scheduledSvc,
 		accountTestSvc: accountTestSvc,
 		rateLimitSvc:   rateLimitSvc,
+		webhookSvc:     NewWebhookService(),
 		cfg:            cfg,
 	}
 }
@@ -130,6 +132,22 @@ func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *Sched
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d SaveResult error: %v", plan.ID, err)
 	}
 
+	// Send webhook notification on failure if configured.
+	if result.Status != "success" && plan.NotifyOnFailure && plan.WebhookURL != "" {
+		webhookErr := s.webhookSvc.SendTestFailure(ctx, plan.WebhookURL, WebhookTestFailurePayload{
+			PlanID:       plan.ID,
+			AccountID:    plan.AccountID,
+			ModelID:      plan.ModelID,
+			Status:       result.Status,
+			ErrorMessage: result.ErrorMessage,
+			LatencyMs:    result.LatencyMs,
+			StartedAt:    result.StartedAt,
+		})
+		if webhookErr != nil {
+			logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d webhook error: %v", plan.ID, webhookErr)
+		}
+	}
+
 	// Auto-recover account if test succeeded and auto_recover is enabled.
 	if result.Status == "success" && plan.AutoRecover {
 		s.tryRecoverAccount(ctx, plan.AccountID, plan.ID)
@@ -144,6 +162,7 @@ func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *Sched
 	if err := s.planRepo.UpdateAfterRun(ctx, plan.ID, time.Now(), nextRun); err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d UpdateAfterRun error: %v", plan.ID, err)
 	}
+
 }
 
 // tryRecoverAccount attempts to recover an account from recoverable runtime state.
